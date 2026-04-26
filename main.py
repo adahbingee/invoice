@@ -4,6 +4,7 @@
 發票號碼與金額，並將結果寫入輸出的 Markdown 報告。
 """
 
+import argparse
 import os
 import re
 import shutil
@@ -161,6 +162,21 @@ def process_invoice_directory(directory_path, output_directory):
 
 
 if __name__ == '__main__':
-    dir_input  = './input/'
-    dir_output = './output/'
-    process_invoice_directory(dir_input, dir_output)
+    parser = argparse.ArgumentParser(
+        description='處理 QR code 發票，支援 JPG/JPEG/PNG/PDF 檔案。'
+    )
+    parser.add_argument(
+        'input_dir',
+        nargs='?',
+        default='./input/',
+        help='輸入資料夾路徑（預設 ./input/）'
+    )
+    parser.add_argument(
+        'output_dir',
+        nargs='?',
+        default='./output/',
+        help='輸出資料夾路徑（預設 ./output/）'
+    )
+    args = parser.parse_args()
+
+    process_invoice_directory(args.input_dir, args.output_dir)
