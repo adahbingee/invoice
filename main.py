@@ -61,16 +61,22 @@ def process_ticket(image: Image):
     return amount, invoice_number
 
 
-def process_img(img_file):
-    image = Image.open(img_file)
+def process_file(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == '.pdf':
+        image = pdf_to_image(file_path, 0)
+    else:
+        image = Image.open(file_path)
+
     amount, invoice_number = process_ticket(image)
-    return os.path.basename(img_file), amount, invoice_number
+    return os.path.basename(file_path), amount, invoice_number, ext
 
 
-def process_pdf(pdf_file):
-    image = pdf_to_image(pdf_file, 0)
-    amount, invoice_number = process_ticket(image)
-    return os.path.basename(pdf_file), amount, invoice_number
+def save_processed_file(src_path, output_directory, invoice_number, amount, ext):
+    new_file_name = f"{invoice_number}_{amount:.2f}{ext}"
+    new_file_path = os.path.join(output_directory, new_file_name)
+    shutil.copyfile(src_path, new_file_path)
+    return new_file_name
 
 
 def process_invoice_directory(directory_path, output_directory):
@@ -86,64 +92,39 @@ def process_invoice_directory(directory_path, output_directory):
     duplicate_count = 0
     failed_count = 0
 
+    supported_extensions = {'.jpg', '.jpeg', '.png', '.pdf'}
+
     for file in os.listdir(directory_path):
-        if file.endswith('.jpg'):
-            total_files += 1
-            img_path = os.path.join(directory_path, file)
-            print(f"處理文件：{img_path}")
-            file_name, amount, invoice_number = process_img(img_path)
+        ext = os.path.splitext(file)[1].lower()
+        if ext not in supported_extensions:
+            continue
 
-            if amount is None or invoice_number is None:
-                print(f"無法解析 QR code 或缺少資料：{file_name}\n")
-                failed_count += 1
-                continue
+        total_files += 1
+        file_path = os.path.join(directory_path, file)
+        print(f"處理文件：{file_path}")
 
-            if invoice_number in invoice_numbers:
-                print(f'跳過重複發票 {invoice_number}\n')
-                duplicate_count += 1
-                continue
+        file_name, amount, invoice_number, ext = process_file(file_path)
 
-            new_file_name = f"{invoice_number}_{amount:.2f}.jpg"
-            new_file_path = os.path.join(output_directory, new_file_name)
-            shutil.copyfile(img_path, new_file_path)
+        if amount is None or invoice_number is None:
+            print(f"無法解析 QR code 或缺少資料：{file_name}\n")
+            failed_count += 1
+            continue
 
-            markdown_table += f"| {serial_number} | {invoice_number} | {amount:.2f} |\n"
-            serial_number += 1
-            total_amount += amount
-            invoice_numbers.append(invoice_number)
-            success_count += 1
+        if invoice_number in invoice_numbers:
+            print(f'跳過重複發票 {invoice_number}\n')
+            duplicate_count += 1
+            continue
 
-            print(f"新文件名稱: {new_file_name}")
-            print('-------------------')
+        new_file_name = save_processed_file(file_path, output_directory, invoice_number, amount, ext)
 
-        if file.endswith('.pdf'):
-            total_files += 1
-            pdf_path = os.path.join(directory_path, file)
-            print(f"處理文件：{pdf_path}")
-            file_name, amount, invoice_number = process_pdf(pdf_path)
+        markdown_table += f"| {serial_number} | {invoice_number} | {amount:.2f} |\n"
+        serial_number += 1
+        total_amount += amount
+        invoice_numbers.append(invoice_number)
+        success_count += 1
 
-            if amount is None or invoice_number is None:
-                print(f"無法解析 QR code 或缺少資料：{file_name}\n")
-                failed_count += 1
-                continue
-
-            if invoice_number in invoice_numbers:
-                print(f'跳過重複發票 {invoice_number}\n')
-                duplicate_count += 1
-                continue
-
-            new_file_name = f"{invoice_number}_{amount:.2f}.pdf"
-            new_file_path = os.path.join(output_directory, new_file_name)
-            shutil.copyfile(pdf_path, new_file_path)
-
-            markdown_table += f"| {serial_number} | {invoice_number} | {amount:.2f} |\n"
-            serial_number += 1
-            total_amount += amount
-            invoice_numbers.append(invoice_number)
-            success_count += 1
-
-            print(f"新文件名稱: {new_file_name}")
-            print('-------------------')
+        print(f"新文件名稱: {new_file_name}")
+        print('-------------------')
 
     total_amount = round(total_amount, 2)
     markdown_table += f"|   | 合計金額 | {total_amount} |\n"
