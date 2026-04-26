@@ -15,22 +15,16 @@ def pdf_to_image(pdf_path, page_num=0):
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     return img
 
-
-def crop_image(image, area):
-    return image.crop(area)
-
-
 def decode_qrcode(image):
     results = zxingcpp.read_barcodes(image)
     if results:
         return results[0].text
     return None
 
-
 def process_ticket(image: Image):
     width, height = image.size
     top_left_area = (0, 0, width * 0.4, height * 0.4)
-    top_left_image = crop_image(image, top_left_area)
+    top_left_image = image.crop(top_left_area)
 
     qr_code_data = decode_qrcode(top_left_image)
     amount = None
@@ -83,14 +77,14 @@ def process_invoice_directory(directory_path, output_directory):
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
-    markdown_table = "| 流水號 | 發票號碼 | 金額 |\n| --- | --- | ---: |\n"
-    serial_number = 1
-    total_amount = 0
+    markdown_table  = "| 流水號 | 發票號碼 | 金額 |\n| --- | --- | ---: |\n"
+    serial_number   = 1
+    total_amount    = 0
     invoice_numbers = []
-    total_files = 0
-    success_count = 0
+    total_files     = 0
+    success_count   = 0
     duplicate_count = 0
-    failed_count = 0
+    failed_count    = 0
 
     supported_extensions = {'.jpg', '.jpeg', '.png', '.pdf'}
 
