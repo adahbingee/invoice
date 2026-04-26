@@ -1,3 +1,9 @@
+"""發票處理器：從 QR code 擷取發票資料。
+
+支援 JPG、JPEG、PNG 與 PDF 檔案。從文件左上角讀取 QR code，擷取
+發票號碼與金額，並將結果寫入輸出的 Markdown 報告。
+"""
+
 import os
 import re
 import shutil
@@ -7,6 +13,7 @@ from PIL import Image
 
 
 def pdf_to_image(pdf_path, page_num=0):
+    """將 PDF 頁面轉換成 PIL Image。"""
     doc = fitz.open(pdf_path)
     page = doc.load_page(page_num)
     zoom = 2
@@ -16,12 +23,20 @@ def pdf_to_image(pdf_path, page_num=0):
     return img
 
 def decode_qrcode(image):
+    """從影像讀取 QR code 資料。
+
+    若找到條碼，則回傳解碼文字；否則回傳 None。
+    """
     results = zxingcpp.read_barcodes(image)
     if results:
         return results[0].text
     return None
 
 def process_ticket(image: Image):
+    """從票據影像擷取發票金額與號碼。
+
+    本函式會裁切影像左上方 40% 區域，並從該區域解碼 QR code。
+    """
     width, height = image.size
     top_left_area = (0, 0, width * 0.4, height * 0.4)
     top_left_image = image.crop(top_left_area)
@@ -67,6 +82,7 @@ def process_file(file_path):
 
 
 def save_processed_file(src_path, output_directory, invoice_number, amount, ext):
+    """將處理後的檔案複製到輸出目錄，並使用新檔名。"""
     new_file_name = f"{invoice_number}_{amount:.2f}{ext}"
     new_file_path = os.path.join(output_directory, new_file_name)
     shutil.copyfile(src_path, new_file_path)
@@ -74,6 +90,11 @@ def save_processed_file(src_path, output_directory, invoice_number, amount, ext)
 
 
 def process_invoice_directory(directory_path, output_directory):
+    """處理輸入目錄中的所有支援發票檔案。
+
+    本函式會掃描支援的副檔名，解碼 QR code 資料，將成功處理的檔案
+    複製至輸出目錄，並產生 Markdown 結果摘要。
+    """
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
@@ -87,6 +108,7 @@ def process_invoice_directory(directory_path, output_directory):
     failed_count    = 0
 
     supported_extensions = {'.jpg', '.jpeg', '.png', '.pdf'}
+    # 只處理支援的副檔名檔案
 
     for file in os.listdir(directory_path):
         ext = os.path.splitext(file)[1].lower()
@@ -99,6 +121,7 @@ def process_invoice_directory(directory_path, output_directory):
 
         file_name, amount, invoice_number, ext = process_file(file_path)
 
+        # 若任一項資料缺失，則無法安全記錄該發票
         if amount is None or invoice_number is None:
             print(f"無法解析 QR code 或缺少資料：{file_name}\n")
             failed_count += 1
