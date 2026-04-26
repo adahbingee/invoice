@@ -135,10 +135,10 @@ def process_invoice_directory(directory_path, output_directory):
         new_file_name = save_processed_file(file_path, output_directory, invoice_number, amount, ext)
 
         markdown_table += f"| {serial_number} | {invoice_number} | {amount:.2f} |\n"
-        serial_number += 1
-        total_amount += amount
+        serial_number  += 1
+        total_amount   += amount
+        success_count  += 1
         invoice_numbers.append(invoice_number)
-        success_count += 1
 
         print(f"新文件名稱: {new_file_name}")
         print('-------------------')
