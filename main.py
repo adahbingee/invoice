@@ -138,6 +138,6 @@ def process_invoice_directory(directory_path, output_directory):
 
 
 if __name__ == '__main__':
-    directory_path   = './input/'
-    output_directory = './output/'
-    process_invoice_directory(directory_path, output_directory)
+    dir_input  = './input/'
+    dir_output = './output/'
+    process_invoice_directory(dir_input, dir_output)
