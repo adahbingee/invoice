@@ -33,38 +33,30 @@ def process_ticket(image: Image):
     top_left_image = crop_image(image, top_left_area)
 
     qr_code_data = decode_qrcode(top_left_image)
+    amount = None
+    invoice_number = None
+
     if qr_code_data:
         if qr_code_data.startswith("http"):
             amount_re = re.compile(r'total_amount=(\d+)')
             amount_match = amount_re.search(qr_code_data)
             if amount_match:
                 amount = int(amount_match.group(1)) / 100
-            else:
-                amount = "Not found"
 
             invoice_number_re = re.compile(r'bill_num=(\d+)')
             invoice_number_match = invoice_number_re.search(qr_code_data)
             if invoice_number_match:
                 invoice_number = invoice_number_match.group(1)
-            else:
-                invoice_number = "Not found"
         else:
             split_data = qr_code_data.split(',')
             if len(split_data) > 4:
                 try:
                     amount = float(split_data[4])
                 except ValueError:
-                    amount = "Not found"
-            else:
-                amount = "Not found"
+                    amount = None
 
             if len(split_data) > 3:
                 invoice_number = split_data[3]
-            else:
-                invoice_number = "Not found"
-    else:
-        amount = "Not found"
-        invoice_number = "Not found"
 
     return amount, invoice_number
 
@@ -89,15 +81,26 @@ def process_invoice_directory(directory_path, output_directory):
     serial_number = 1
     total_amount = 0
     invoice_numbers = []
+    total_files = 0
+    success_count = 0
+    duplicate_count = 0
+    failed_count = 0
 
     for file in os.listdir(directory_path):
         if file.endswith('.jpg'):
+            total_files += 1
             img_path = os.path.join(directory_path, file)
             print(f"處理文件：{img_path}")
             file_name, amount, invoice_number = process_img(img_path)
 
+            if amount is None or invoice_number is None:
+                print(f"無法解析 QR code 或缺少資料：{file_name}\n")
+                failed_count += 1
+                continue
+
             if invoice_number in invoice_numbers:
                 print(f'跳過重複發票 {invoice_number}\n')
+                duplicate_count += 1
                 continue
 
             new_file_name = f"{invoice_number}_{amount:.2f}.jpg"
@@ -108,17 +111,25 @@ def process_invoice_directory(directory_path, output_directory):
             serial_number += 1
             total_amount += amount
             invoice_numbers.append(invoice_number)
+            success_count += 1
 
             print(f"新文件名稱: {new_file_name}")
             print('-------------------')
 
         if file.endswith('.pdf'):
+            total_files += 1
             pdf_path = os.path.join(directory_path, file)
             print(f"處理文件：{pdf_path}")
             file_name, amount, invoice_number = process_pdf(pdf_path)
 
+            if amount is None or invoice_number is None:
+                print(f"無法解析 QR code 或缺少資料：{file_name}\n")
+                failed_count += 1
+                continue
+
             if invoice_number in invoice_numbers:
                 print(f'跳過重複發票 {invoice_number}\n')
+                duplicate_count += 1
                 continue
 
             new_file_name = f"{invoice_number}_{amount:.2f}.pdf"
@@ -129,12 +140,23 @@ def process_invoice_directory(directory_path, output_directory):
             serial_number += 1
             total_amount += amount
             invoice_numbers.append(invoice_number)
+            success_count += 1
 
             print(f"新文件名稱: {new_file_name}")
             print('-------------------')
 
     total_amount = round(total_amount, 2)
     markdown_table += f"|   | 合計金額 | {total_amount} |\n"
+    markdown_table += f"|   | 文件總數 | {total_files} |\n"
+    markdown_table += f"|   | 成功數量 | {success_count} |\n"
+    markdown_table += f"|   | 重複數量 | {duplicate_count} |\n"
+    markdown_table += f"|   | 失敗數量 | {failed_count} |\n"
+
+    print('處理摘要:')
+    print(f'  總共文件: {total_files}')
+    print(f'  成功處理: {success_count}')
+    print(f'  重複檔案: {duplicate_count}')
+    print(f'  失敗檔案: {failed_count}')
 
     with open(os.path.join(output_directory, 'output.md'), 'w', encoding='utf-8') as f:
         f.write(markdown_table)
