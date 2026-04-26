@@ -68,7 +68,7 @@ def process_ticket(image: Image):
             if len(split_data) > 3:
                 invoice_number = split_data[3]
 
-    return amount, invoice_number
+    return amount, invoice_number, qr_code_data
 
 
 def process_file(file_path):
@@ -78,8 +78,8 @@ def process_file(file_path):
     else:
         image = Image.open(file_path)
 
-    amount, invoice_number = process_ticket(image)
-    return os.path.basename(file_path), amount, invoice_number, ext
+    amount, invoice_number, qr_code_data = process_ticket(image)
+    return os.path.basename(file_path), amount, invoice_number, ext, qr_code_data
 
 
 def save_processed_file(src_path, output_directory, invoice_number, amount, ext):
@@ -120,11 +120,14 @@ def process_invoice_directory(directory_path, output_directory):
         file_path = os.path.join(directory_path, file)
         print(f"處理文件：{file_path}")
 
-        file_name, amount, invoice_number, ext = process_file(file_path)
+        file_name, amount, invoice_number, ext, qr_code_data = process_file(file_path)
+
+        print(f"QR code 內容：{qr_code_data if qr_code_data else '未找到 QR code'}")
 
         # 若任一項資料缺失，則無法安全記錄該發票
         if amount is None or invoice_number is None:
-            print(f"無法解析 QR code 或缺少資料：{file_name}\n")
+            print(f"無法解析 QR code 或缺少資料：{file_name}")
+            print()
             failed_count += 1
             continue
 
