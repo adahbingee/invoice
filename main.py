@@ -1,38 +1,50 @@
-"""發票處理器（優化版）：從 QR code 擷取發票資料。
+"""發票處理器：從 QR code 擷取發票資料。
 
-支援 JPG、JPEG、PNG 與 PDF 檔案。從文件左上角讀取 QR code，
-擷取發票號碼與金額，並將結果寫入輸出的 Markdown 報告。
+支援 PDF 與常見點陣圖格式（JPG/JPEG/PNG/GIF/BMP/TIFF/WEBP 等，
+凡 Pillow 可開啟者皆支援），擷取發票號碼與金額並產生 Markdown 報告。
+點陣圖解碼以 Pillow 為前端，格式無關；內嵌圖片的格式由 PDF 決定，
+不假設為 PNG。
 
-相較原版的調整：
-1. PDF 使用 with 關閉句柄
-2. 逐檔案 try/except，失敗原因寫入報告
-3. QR 欄位按語意識別（保留位置解析作為回退）
-4. 去重改用 set
-5. 金額改用整數分定點數，避免浮點誤差
-6. 目錄排序、PDF 優先於圖片
-7. 報告記錄重複與失敗明細
-8. 支援遞迴子目錄
-9. 輸出檔名衝突時加後綴
-10. zoom 可配置，解析失敗時以更高倍率重試
+PDF 讀取策略（兩條路徑）：
+  主路徑（pypdf，輕量必需）：直接從 PDF 第一頁提取所有內嵌圖片並逐張解碼 QR。
+    不假設 QR 的尺寸與位置，整張圖片交給解碼器，解析度不足時放大重試。
+    无需渲染整頁，速度快且依賴極小。
+  兜底路徑（pypdfium2，選用懶加載）：若內嵌圖片解不出 QR（例如 QR 為矢量繪製），
+    才渲染整頁並整頁解碼。需另外安裝：pip install pypdfium2
+  兩條路徑都只讀第一頁、只取第一個解出的 QR，不做多頁或多結果掃描。
 
-QR 仍舊只從左上角 40% 區域、第一頁、第一個條碼讀取——發票格式標準化，無須全圖掃描。
+其餘設計：
+  - 逐檔案 try/except，失敗原因寫入報告
+  - QR 欄位按語意識別（保留位置解析作為回退）
+  - 去重改用 set
+  - 金額改用整數分定點數，避免浮點誤差
+  - 目錄排序、PDF 優先於圖片
+  - 報告記錄重複與失敗明細
+  - 支援遞迴子目錄
+  - 輸出檔名衝突時加後綴
 """
 
 import argparse
+import io
 import os
 import re
 import shutil
-import sys
 
-import fitz
-import zxingcpp
 from PIL import Image
+from pypdf import PdfReader
+import zxingcpp
 
-SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.pdf'}
+SUPPORTED_EXTENSIONS = {
+    '.jpg', '.jpeg', '.jpe', '.png', '.gif', '.bmp',
+    '.tif', '.tiff', '.webp', '.pdf',
+}
 INVOICE_NO_RE = re.compile(r'\d{15,25}')
 AMOUNT_RE = re.compile(r'\d+(?:\.\d{1,2})?')
 HTTP_AMOUNT_RE = re.compile(r'total_amount=(\d+)')
 HTTP_BILL_RE = re.compile(r'bill_num=(\d+)')
+
+_PYPDFIUM2_WARNED = False
+_pypdfium2 = None
 
 
 def yuan_to_cents(text: str) -> int:
@@ -56,17 +68,31 @@ def cents_to_str(cents: int) -> str:
     return f'{sign}{cents // 100}.{cents % 100:02d}'
 
 
-def pdf_to_image(pdf_path, page_num=0, zoom=2.0):
-    """將 PDF 頁面轉換成 PIL Image，use 'with' 確保句柄關閉。"""
-    with fitz.open(pdf_path) as doc:
-        page = doc.load_page(page_num)
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        return Image.frombytes('RGB', [pix.width, pix.height], pix.samples)
+def decode_qrcode(image, scales=(1, 2, 4)):
+    """解碼影像的第一個條碼，回溯所有影格與放大重試。
 
-
-def decode_qrcode(image):
-    results = zxingcpp.read_barcodes(image)
-    return results[0].text if results else None
+    不裁剪固定區域，QR 出現在影像任何位置都能讀取；
+    不假設影像格式，任何 Pillow 可開啟的格式皆可。
+    多影格格式（如動畫 GIF、多頁 TIFF）會逐一檢查。
+    scales 為整數倍放大序列，1 倍成功就不做後續重試。
+    """
+    frame_count = getattr(image, 'n_frames', 1)
+    for frame_index in range(frame_count):
+        if frame_index:
+            try:
+                image.seek(frame_index)
+            except (EOFError, ValueError):
+                break
+        for scale in scales:
+            target = image
+            if scale != 1:
+                target = image.resize(
+                    (image.width * scale, image.height * scale), Image.LANCZOS
+                )
+            results = zxingcpp.read_barcodes(target)
+            if results:
+                return results[0].text
+    return None
 
 
 def parse_qr_data(data):
@@ -104,13 +130,61 @@ def parse_qr_data(data):
     return amount_cents, invoice_number
 
 
-def process_ticket(image):
-    """只讀取影像左上角 40% 區域的第一個 QR code。"""
-    width, height = image.size
-    top_left = image.crop((0, 0, width * 0.4, height * 0.4))
-    qr_data = decode_qrcode(top_left)
+def decode_from_image(image):
+    """解碼整張影像的 QR，回傳 (qr_data, amount_cents, invoice_number)。
+
+    不假設 QR 位置與解析度，僅取第一個解出的條碼。
+    """
+    qr_data = decode_qrcode(image)
     amount_cents, invoice_number = parse_qr_data(qr_data)
-    return amount_cents, invoice_number, qr_data
+    return qr_data, amount_cents, invoice_number
+
+
+def decode_pdf_embedded_images(pdf_path, page_num=0):
+    """主路徑：從 PDF 頁面提取內嵌圖片並逐張解碼 QR。
+
+    不假設 QR 的尺寸或位置：實測內嵌圖從 47x47 到 650x433 都有，
+    可能是獨立的 QR 圖，也可能 QR 只是較大圖片的一角。
+    逐張整圖解碼，解析度不足時由 decode_qrcode 放大重試。
+    """
+    reader = PdfReader(pdf_path)
+    if page_num >= len(reader.pages):
+        return None, None, None
+    page = reader.pages[page_num]
+
+    for image_file in page.images:
+        try:
+            with Image.open(io.BytesIO(image_file.data)) as image:
+                qr_data = decode_qrcode(image)
+                amount_cents, invoice_number = parse_qr_data(qr_data)
+            if amount_cents is not None and invoice_number is not None:
+                return qr_data, amount_cents, invoice_number
+        except Exception:
+            continue
+    return None, None, None
+
+
+def render_pdf_page(pdf_path, page_num=0, zoom=2.0):
+    """兜底路徑：用 pypdfium2 渲染整頁成 PIL Image。
+
+    pypdfium2 為選用依賴，懶加載；未安裝時回傳 None 並提示一次。
+    安裝方式：pip install pypdfium2
+    """
+    global _pypdfium2, _PYPDFIUM2_WARNED
+    if _pypdfium2 is None:
+        try:
+            import pypdfium2
+            _pypdfium2 = pypdfium2
+        except ImportError:
+            if not _PYPDFIUM2_WARNED:
+                print('提示：內嵌圖片未能解碼，且未安裝 pypdfium2；'
+                      '若需渲染兜底請執行 pip install pypdfium2')
+                _PYPDFIUM2_WARNED = True
+            return None
+
+    pdf = _pypdfium2.PdfDocument(pdf_path)
+    page = pdf[page_num]
+    return page.render(scale=zoom).to_pil()
 
 
 def process_file(file_path, zoom_levels=(2.0,)):
@@ -118,15 +192,21 @@ def process_file(file_path, zoom_levels=(2.0,)):
     name = os.path.basename(file_path)
 
     if ext == '.pdf':
-        amount_cents = invoice_number = qr_data = None
-        for zoom in zoom_levels:
-            image = pdf_to_image(file_path, 0, zoom)
-            amount_cents, invoice_number, qr_data = process_ticket(image)
-            if amount_cents is not None and invoice_number is not None:
-                break
+        # 主路徑：直接提取內嵌 QR 圖片
+        qr_data, amount_cents, invoice_number = decode_pdf_embedded_images(file_path)
+
+        # 兜底：渲染整頁後整頁解碼（QR 為矢量繪製或無內嵌圖時）
+        if amount_cents is None or invoice_number is None:
+            for zoom in zoom_levels:
+                image = render_pdf_page(file_path, 0, zoom)
+                if image is None:
+                    break
+                qr_data, amount_cents, invoice_number = decode_from_image(image)
+                if amount_cents is not None and invoice_number is not None:
+                    break
     else:
         with Image.open(file_path) as image:
-            amount_cents, invoice_number, qr_data = process_ticket(image)
+            qr_data, amount_cents, invoice_number = decode_from_image(image)
 
     return name, amount_cents, invoice_number, ext, qr_data
 
@@ -247,10 +327,12 @@ def process_invoice_directory(directory_path, output_directory, zoom=2.0, recurs
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='處理 QR code 發票（優化版），支援 JPG/JPEG/PNG/PDF。')
+    parser = argparse.ArgumentParser(
+        description='處理 QR code 發票，支援 PDF 與常見點陣圖格式。'
+    )
     parser.add_argument('input_dir', nargs='?', default='./input/', help='輸入資料夾路徑')
     parser.add_argument('output_dir', nargs='?', default='./output/', help='輸出資料夾路徑')
-    parser.add_argument('--zoom', type=float, default=2.0, help='PDF 渲染倍率（預設 2.0）')
+    parser.add_argument('--zoom', type=float, default=2.0, help='PDF 渲染倍率（僅兜底路徑使用，預設 2.0）')
     parser.add_argument('--no-recursive', action='store_true', help='不遞歸掃描子目錄')
     args = parser.parse_args()
     process_invoice_directory(
