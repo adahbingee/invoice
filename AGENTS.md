@@ -5,7 +5,8 @@ The user communicates in **Traditional Chinese** (繁體中文); reply in that r
 
 ## What this workspace is
 
-A toolchain that parses Taiwan e-invoice QR codes out of a batch of files (59 PDF + 1 PNG)
+A toolchain that parses Mainland China VAT e-invoice QR codes (数电票 / fully digitalized
+e-invoices) out of a batch of files (59 PDF + 1 PNG)
 and produces a renamed invoice folder plus a Markdown report. The source project is a clone of
 `https://github.com/adahbingee/invoice` living in `invoice-tool/`; `adahbingee` is the user's own
 GitHub account, so `origin/main` is the correct push target.
@@ -47,8 +48,10 @@ without a fresh, explicit request.
 - **PDF fallback path**: `pypdfium2` renders the page, lazily imported, used only when the primary
   path fails (e.g. vector-drawn QR). Optional dependency; print a one-time hint if missing.
 - **Bitmap inputs**: Pillow opens the file, format-agnostic.
-- QR text is parsed semantically: 15–25 digit number = invoice number, decimal value = amount;
-  positional indexes are kept only as a fallback. HTTP format uses `total_amount` (already cents).
+- QR text is parsed semantically: 15–25 digit number = invoice number, decimal value = amount
+  (价税合计, tax-inclusive for 数电票); positional indexes are kept only as a fallback.
+  Mainland VAT invoice QR only (`01,32,,20-digit-number,amount,date,,random`); the Taiwan
+  e-invoice HTTP `total_amount`/`bill_num` branch was deliberately removed.
 - Robustness: per-file `try/except`, `set` for dedup, sorted walk with PDFs before bitmaps,
   conflict-safe output names (`_1`, `_2`), duplicate/failure detail sections in the report.
 - CLI: `python main.py [input_dir] [output_dir] [--zoom N] [--no-recursive]`

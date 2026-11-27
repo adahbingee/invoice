@@ -40,8 +40,6 @@ SUPPORTED_EXTENSIONS = {
 }
 INVOICE_NO_RE = re.compile(r'\d{15,25}')
 AMOUNT_RE = re.compile(r'\d+(?:\.\d{1,2})?')
-HTTP_AMOUNT_RE = re.compile(r'total_amount=(\d+)')
-HTTP_BILL_RE = re.compile(r'bill_num=(\d+)')
 
 _PYPDFIUM2_WARNED = False
 _pypdfium2 = None
@@ -100,14 +98,9 @@ def parse_qr_data(data):
     if not data:
         return None, None
 
-    if data.startswith('http'):
-        amount_match = HTTP_AMOUNT_RE.search(data)
-        bill_match = HTTP_BILL_RE.search(data)
-        # HTTP 格式的 total_amount 原本就是以「分」為單位
-        amount_cents = int(amount_match.group(1)) if amount_match else None
-        invoice_number = bill_match.group(1) if bill_match else None
-        return amount_cents, invoice_number
-
+    # 大陸增值稅發票 QR：逗號分隔，例如
+    # 01,32,,26952000004987441516,125.10,20261122,,83D7
+    # 欄位依次為：固定標識、種類代碼、發票代碼、發票號碼、價稅合計、開票日期、校驗碼、隨機碼。
     parts = [p.strip() for p in data.split(',')]
 
     # 語意識別：發票號碼為 15~25 位連續數字；金額為帶小數點的數字
